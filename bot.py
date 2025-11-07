@@ -14,7 +14,29 @@ logging.basicConfig(
 
 BOT_TOKEN = "8334498200:AAFafS7CMwYuFwMW5Ze4pFYH1YnZxhwSUV8"
 ADMIN_CHAT_ID = "5533990703"
-PDF_URL = "https://raw.githubusercontent.com/qypwznvm95-alt/autoprime-bot/main/catalog.pdf"
+async def send_pdf_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    try:
+        await context.bot.send_message(user.id, "📥 Отправляем каталог...", parse_mode='HTML')
+        
+        # Отправляем локальный файл
+        with open('catalog.pdf', 'rb') as pdf_file:
+            await context.bot.send_document(
+                chat_id=user.id,
+                document=pdf_file,
+                filename="Каталог AUTOPRIME до 160 л.с..pdf",
+                caption="📋 Каталог автомобилей до 160 л.с.\n\n📞 @AUTOPRIMEmanager",
+                parse_mode='HTML'
+            )
+        
+        user_info = f"👤 {user.first_name} | 🆔 {user.id}"
+        notification = f"📥 ПОЛЬЗОВАТЕЛЬ ЗАПРОСИЛ КАТАЛОГ\n\n{user_info}"
+        await send_admin_notification(context.application, notification)
+        
+    except Exception as e:
+        print(f"❌ Ошибка отправки PDF: {e}")
+        await context.bot.send_message(user.id, "❌ Ошибка отправки каталога")
 
 def create_keyboard():
     keyboard = [
