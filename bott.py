@@ -1,4 +1,3 @@
-cat > bot.py << 'EOF'
 import logging
 import os
 import sqlite3
