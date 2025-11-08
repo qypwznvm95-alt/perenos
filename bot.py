@@ -1,10 +1,12 @@
 import logging
 import os
+import sqlite3
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
+import asyncio
 
 # Настройка бота
 logging.basicConfig(
@@ -14,7 +16,109 @@ logging.basicConfig(
 
 BOT_TOKEN = "8334498200:AAFafS7CMwYuFwMW5Ze4pFYH1YnZxhwSUV8"
 ADMIN_CHAT_ID = "5533990703"
+MANAGER_USERNAME = "@AUTOPRIMEmanager"
 PDF_FILE = "catalog.pdf"
+
+# Инициализация базы данных
+def init_db():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_action TEXT,
+            last_action_time DATETIME,
+            manager_message_sent BOOLEAN DEFAULT FALSE
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def log_user_action(user_id, username, first_name, action):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO users 
+        (user_id, username, first_name, last_action, last_action_time) 
+        VALUES (?, ?, ?, ?, ?)
+    ''', (user_id, username, first_name, action, datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_users_for_manager_message():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, first_name FROM users 
+        WHERE manager_message_sent = FALSE 
+        AND last_action_time > datetime('now', '-1 day')
+    ''')
+    users = cursor.fetchall()
+    conn.close()
+    return users
+
+def mark_manager_message_sent(user_id):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE users SET manager_message_sent = TRUE WHERE user_id = ?
+    ''', (user_id,))
+    conn.commit()
+    conn.close()
+
+async def send_manager_followup(application, user_id, username, first_name):
+    try:
+        manager_message = (
+            f"👋 Привет, {first_name or 'друг'}!\n\n"
+            f"Это {MANAGER_USERNAME} - менеджер AUTOPRIME.\n\n"
+            "🔍 Вижу, что ты интересовался нашим каталогом автомобилей. "
+            "Хочу лично предложить тебе помощь в подборе авто!\n\n"
+            "🚗 <b>Что я могу для тебя сделать:</b>\n"
+            "• Подобрать автомобиль по твоим параметрам\n"
+            "• Ответить на все вопросы по покупке\n"
+            "• Организовать полный цикл сделки\n"
+            "• Проконсультировать по документам\n\n"
+            "💬 <b>Напиши мне прямо сейчас:</b>\n"
+            "• Telegram: @AUTOPRIMEmanager\n"
+            "• WhatsApp: https://wa.me/79188999006\n\n"
+            "Жду твоего сообщения! 😊"
+        )
+        
+        await application.bot.send_message(
+            chat_id=user_id,
+            text=manager_message,
+            parse_mode='HTML'
+        )
+        
+        mark_manager_message_sent(user_id)
+        print(f"✅ Авто-сообщение менеджера отправлено пользователю {first_name} (ID: {user_id})")
+        
+    except Exception as e:
+        print(f"❌ Ошибка отправки авто-сообщения пользователю {user_id}: {e}")
+
+async def scheduled_manager_messages(application):
+    while True:
+        try:
+            print("🔍 Проверяю пользователей для авто-рассылки...")
+            users = get_users_for_manager_message()
+            
+            if users:
+                print(f"📤 Найдено {len(users)} пользователей для рассылки")
+                
+                for user_id, username, first_name in users:
+                    await send_manager_followup(application, user_id, username, first_name)
+                    await asyncio.sleep(2)  # Пауза между сообщениями
+            else:
+                print("✅ Нет новых пользователей для рассылки")
+                
+            # Проверяем каждые 30 минут
+            await asyncio.sleep(1800)
+            
+        except Exception as e:
+            print(f"❌ Ошибка в scheduled_manager_messages: {e}")
+            await asyncio.sleep(60)
 
 def create_keyboard():
     keyboard = [
@@ -39,6 +143,9 @@ async def send_admin_notification(application, message: str):
 
 async def send_pdf_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # Логируем действие пользователя
+    log_user_action(user.id, user.username, user.first_name, "requested_catalog")
     
     try:
         await context.bot.send_message(
@@ -76,7 +183,8 @@ async def send_pdf_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
         notification = (
             "📥 <b>ПОЛЬЗОВАТЕЛЬ ЗАПРОСИЛ КАТАЛОГ</b>\n\n"
             f"{user_info}\n"
-            f"📲 <b>Действие:</b> Скачал каталог PDF\n\n"
+            f"📲 <b>Действие:</b> Скачал каталог PDF\n"
+            f"🔔 <b>Авто-сообщение:</b> Будет отправлено через 5 минут\n\n"
             f"💬 <b>Написать пользователю:</b>\n"
             f"• <a href='tg://user?id={user.id}'>Написать в Telegram</a>\n"
             f"• <a href='https://wa.me/79188999006'>Перейти в WhatsApp</a>"
@@ -96,6 +204,10 @@ async def send_pdf_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # Логируем действие пользователя
+    log_user_action(user.id, user.username, user.first_name, "started_bot")
+    
     user_info = (
         f"👤 <b>{user.first_name or 'Не указано'}</b>\n"
         f"🆔 ID: <code>{user.id}</code>\n"
@@ -122,7 +234,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notification = (
         "🚀 <b>НОВЫЙ ПОЛЬЗОВАТЕЛЬ</b>\n\n"
         f"{user_info}\n"
-        f"📲 <b>Действие:</b> Запустил бота"
+        f"📲 <b>Действие:</b> Запустил бота\n"
+        f"🔔 <b>Авто-сообщение:</b> Будет отправлено через 5 минут"
     )
     await send_admin_notification(context.application, notification)
     
@@ -142,6 +255,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # Логируем действие пользователя
+    log_user_action(user.id, user.username, user.first_name, "used_catalog_command")
+    
     print(f"📋 Пользователь {user.first_name} запросил каталог командой")
     
     user_info = (
@@ -154,7 +271,8 @@ async def catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notification = (
         "🔘 <b>КОМАНДА ОТ ПОЛЬЗОВАТЕЛЯ</b>\n\n"
         f"{user_info}\n"
-        f"📲 <b>Действие:</b> Использовал команду /catalog\n\n"
+        f"📲 <b>Действие:</b> Использовал команду /catalog\n"
+        f"🔔 <b>Авто-сообщение:</b> Будет отправлено через 5 минут\n\n"
         f"💬 <b>Написать пользователю:</b>\n"
         f"• <a href='tg://user?id={user.id}'>Написать в Telegram</a>\n"
         f"• <a href='https://wa.me/79188999006'>Перейти в WhatsApp</a>"
@@ -167,14 +285,26 @@ def main():
     print("✅ Бот запускается на Beget...")
     
     try:
+        # Инициализируем базу данных
+        init_db()
+        print("📁 База данных пользователей инициализирована")
+        
         application = Application.builder().token(BOT_TOKEN).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("catalog", catalog))
         application.add_handler(CallbackQueryHandler(button_handler))
         
+        # Запускаем фоновую задачу для авто-рассылки
+        application.job_queue.run_once(
+            lambda context: asyncio.create_task(scheduled_manager_messages(application)), 
+            when=10
+        )
+        
         print("🤖 Бот AUTOPRIME запущен на Beget!")
         print("📢 Система уведомлений активирована")
         print("📁 Используется локальный PDF файл")
+        print("🔔 Авто-рассылка менеджера активирована")
+        print("⏰ Проверка новых пользователей каждые 30 минут")
         
         application.run_polling()
         
