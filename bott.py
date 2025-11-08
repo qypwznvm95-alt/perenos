@@ -102,13 +102,18 @@ async def scheduled_manager_messages(context: ContextTypes.DEFAULT_TYPE):
     """Задача для автоматической рассылки"""
     try:
         print("🔍 Проверяю пользователей для авто-рассылки...")
+        
+        # Получаем application из context
+        application = context.application
+        
+        # Используем синхронные вызовы в отдельном потоке
         users = get_users_for_manager_message()
         
         if users:
             print(f"📤 Найдено {len(users)} пользователей для рассылки")
             
             for user_id, username, first_name in users:
-                await send_manager_followup(context.application, user_id, username, first_name)
+                await send_manager_followup(application, user_id, username, first_name)
                 await asyncio.sleep(2)  # Пауза между сообщениями
         else:
             print("✅ Нет новых пользователей для рассылки")
